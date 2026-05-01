@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.remitly.stockexchange.state.MarketStateConcurrencyTest" tests="1" skipped="0" failures="0" errors="0" timestamp="2026-05-01T09:27:59.824Z" hostname="MacBook-Air-Mateusz.local" time="0.02">
+  <properties/>
+  <testcase name="shouldMaintainConsistencyUnderHighConcurrency()" classname="com.remitly.stockexchange.state.MarketStateConcurrencyTest" time="0.02"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

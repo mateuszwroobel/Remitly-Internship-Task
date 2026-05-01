@@ -1,0 +1,22 @@
+services:
+  lb:
+    build: .
+    ports:
+      - "${PORT:-8080}:8080"
+    command: ["--mode=lb", "--port=8080", "--backends=node1:8080,node2:8080,node3:8080"]
+    depends_on:
+      - node1
+      - node2
+      - node3
+
+  node1:
+    build: .
+    command: ["--mode=node", "--port=8080", "--peers=node2:8080,node3:8080"]
+    
+  node2:
+    build: .
+    command: ["--mode=node", "--port=8080", "--peers=node1:8080,node3:8080"]
+    
+  node3:
+    build: .
+    command: ["--mode=node", "--port=8080", "--peers=node1:8080,node2:8080"]
