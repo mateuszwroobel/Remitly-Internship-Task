@@ -1,51 +1,57 @@
-# Symulator Giełdy (Stock Exchange)
+# Stock Exchange Simulator
 
-Projekt symulujący działanie rozproszonej giełdy akcji. System obsługuje portfele użytkowników, inwentarz banku oraz logowanie transakcji kupna/sprzedaży.
+A project simulating the operation of a distributed stock exchange. The system manages user portfolios, a bank inventory, and logs buy/sell transactions.
 
+A detailed description of architectural decisions can be found in a separate file: [ARCHITECTURE.md](ARCHITECTURE.md).
 
-Szczegółowy opis decyzji architektonicznych znajduje się w osobnym pliku: [ARCHITECTURE.md](ARCHITECTURE.md).
+## System Architecture and Operation
 
-### Architektura i Działanie Systemu
+The system consists of three nodes (backends) and a Load Balancer, all written in pure Java.  
+HTTP traffic is handled by the built-in server `com.sun.net.httpserver.HttpServer`.
 
-System składa się z trzech węzłów (backendów) oraz Load Balancera, napisanych w czystej Javie. 
-Ruch HTTP obsługiwany jest przez wbudowany serwer `com.sun.net.httpserver.HttpServer`.
+### 1. Load Balancer (L7)
 
-1. **Load Balancer (L7)**
-   Przyjmuje zapytania REST od użytkowników i rozdziela je na dostępne węzły. Aby zminimalizować błędy współbieżności, używa strategii *Modulo-based sticky routing* – zapytania o daną akcję (np. AAPL) zawsze trafiają na ten sam węzeł w stabilnych warunkach sieciowych. Load Balancer posiada aktywny mechanizm sprawdzania kondycji (Health Checks) i dynamicznie przywraca powracające węzły do puli.
+Handles incoming REST requests from users and distributes them across available nodes.  
+To minimize concurrency issues, it uses a *modulo-based sticky routing* strategy — requests related to a given stock (e.g., AAPL) are always routed to the same node under stable network conditions.  
 
-2. **Replikacja P2P**
-   Gdy jeden z węzłów pomyślnie przetworzy transakcję, asynchronicznie rozgłasza ją do pozostałych węzłów (wzorzec Fire-and-Forget). Węzły odbierające wymuszają aktualizację lokalnego stanu bez ponownej walidacji warunków biznesowych.
+The Load Balancer includes active health checks and dynamically restores recovered nodes back into the pool.
 
-3. **Zarządzanie stanem**
-   Stan utrzymywany jest w pamięci (In-Memory). Dostęp do zasobów zabezpieczony jest metodą *Lock-striping* (osobne zamki `ReentrantLock` dla każdej z akcji). Pozwala to na pełną współbieżność operacji, o ile nie dotyczą one tego samego waloru. Przed podwójnym przetworzeniem żądań (idempotentność) chroni bezblokujący LRU Cache w postaci `ConcurrentHashMap` działający w parze z kolejką.
+### 2. P2P Replication
 
-### Zalety
+When a node successfully processes a transaction, it asynchronously broadcasts it to the remaining nodes (*Fire-and-Forget pattern*).  
 
-* **Wydajność** – Serwer, klient HTTP oraz sprawdzanie kondycji węzłów działają na lekkich Wątkach Wirtualnych (Virtual Threads).
-* **Odporność na awarie (High Availability)** – Aplikacja radzi sobie z nagłym padem węzła (symulowanym przez endpoint `/chaos`). Load Balancer omija uszkodzone instancje bez zrywania połączeń klientów.
-* **Automatyczny Bootstrapping** – Po restarcie lub nagłej awarii węzła, uszkodzona instancja natychmiast asynchronicznie pobiera pełny stan (zrzut In-Memory) od dostępnych peerów przed powrotem do puli Load Balancera. Rozwiązuje to problem trwałej korupcji danych po utracie pamięci.
-* **Wysoka współbieżność** – Mechanizm Lock-striping eliminuje wąskie gardła synchronizacji i zapobiega blokowaniu całego rynku przy intensywnym ruchu.
+Receiving nodes enforce updates to their local state without re-validating business rules.
 
-### Wady / Ograniczenia
+### 3. State Management
 
-* **Brak stuprocentowej spójności (Write Skew)** – W przypadku awarii jednego z węzłów, podczas opóźnień replikacji lub rebalansowania ruchu, może dojść do zjawiska Write Skew i rozjazdu stanów między instancjami. System nie realizuje twardego konsensusu rozproszonego (np. algorytmu Raft).
-* **Stan w pamięci RAM** – Cały stan giełdy jest ulotny. Całkowity restart klastra skutkuje nieodwracalną utratą danych.
+State is stored entirely in memory (*In-Memory*).  
+Access to resources is protected using a *lock-striping* mechanism (separate `ReentrantLock` per stock).  
 
-### Jak uruchomić
+This enables full concurrency for operations as long as they do not concern the same asset.  
 
-Projekt jest w pełni skonteneryzowany i wykorzystuje Docker Compose.
+Idempotency (protection against duplicate request processing) is ensured by a non-blocking LRU cache implemented using `ConcurrentHashMap` combined with a queue.
 
-**Linux / macOS (ARM64 & x64)**
+## Advantages
+
+- **Performance** – Server, HTTP client, and health checks run on lightweight Virtual Threads.
+- **High Availability** – The system handles sudden node failures (simulated via `/chaos`). The Load Balancer skips failed instances without breaking client connections.
+- **Automatic Bootstrapping** – After restart or failure, a node asynchronously fetches the full in-memory snapshot from peers before rejoining the Load Balancer pool. This prevents permanent data corruption after memory loss.
+- **High Concurrency** – Lock-striping eliminates global synchronization bottlenecks and prevents the entire market from blocking under heavy load.
+
+## Limitations
+
+- **No Strong Consistency (Write Skew)** – During node failures, replication delays, or traffic rebalancing, inconsistencies between nodes may occur. The system does not implement a distributed consensus algorithm (e.g., Raft).
+- **In-Memory State Only** – The entire exchange state is volatile. A full cluster restart results in irreversible data loss.
+
+## How to Run
+
+The project is fully containerized and uses Docker Compose.
+
+### Linux / macOS (ARM64 & x64)
 ```bash
 ./start.sh 8080
 ```
-
 **Windows (x64)**
 ```cmd
 start.bat 8080
 ```
-
-Skrypt automatycznie buduje aplikację za pomocą Gradle, podnosi 3 węzły backendowe i uruchamia Load Balancer na wybranym porcie.
-
-Można przetestować odporność klastra na awarie symulując zabicie jednego z węzłów poleceniem:
-`curl -X POST http://localhost:8080/chaos`
