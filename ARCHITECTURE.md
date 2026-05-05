@@ -1,21 +1,21 @@
-# Architektura Systemu i Decyzje Projektowe
+# System Architecture and Design Decisions
 
-Dokument ten podsumowuje najważniejsze decyzje architektoniczne. Celem było stworzenie rozwiązania prostego, a zarazem odpornego i wydajnego.
+This document summarizes the key architectural decisions. The goal was to create a solution that is simple, yet resilient and efficient.
 
-### 1. Zapobieganie "Write Skew" (L7 Sharding)
-Zamiast skomplikowanych algorytmów konsensusu (np. Raft) czy rozproszonych blokad, zastosowałem pragmatyczne podejście w Warstwie 7 (Load Balancer). 
-Aplikacja używa **Modulo-based sticky routing**: zapytania dotyczące konkretnej akcji (np. `AAPL`) są hashowane i zawsze kierowane do tego samego węzła. Gwarantuje to, że w stabilnym klastrze operacje dla danego waloru są przetwarzane sekwencyjnie na jednej maszynie, drastycznie zmniejszając ryzyko nadpisywania stanu (Write Skew).
+### 1. Preventing "Write Skew" (L7 Sharding)
+Instead of complex consensus algorithms (e.g., Raft) or distributed locks, I applied a pragmatic approach at Layer 7 (Load Balancer). 
+The application uses **Modulo-based sticky routing**: requests regarding a specific asset (e.g., `AAPL`) are hashed and always directed to the same node. This guarantees that in a stable cluster, operations for a given asset are processed sequentially on a single machine, drastically reducing the risk of state overwriting (Write Skew).
 
-### 2. Lock-striping zamiast Globalnych Blokad
-Stan giełdy i portfeli przechowywany jest In-Memory. Zamiast używać słowa kluczowego `synchronized` lub pojedynczego globalnego zamka na całą klasę `MarketState` (co ubiłoby wydajność przy dużym ruchu), użyłem techniki **Lock-striping**.
-Każda akcja posiada własną instancję `ReentrantLock`. Dzięki temu transakcje dotyczące różnych akcji są realizowane w 100% współbieżnie.
+### 2. Lock-striping instead of Global Locks
+The state of the exchange and portfolios is stored In-Memory. Instead of using the `synchronized` keyword or a single global lock on the entire `MarketState` class (which would kill performance under high traffic), I used the **Lock-striping** technique. 
+Each stock has its own `ReentrantLock` instance. Thanks to this, transactions involving different stocks are executed 100% concurrently.
 
-### 3. Asynchroniczna Replikacja P2P
-Aby zachować układ High Availability (HA), każdy węzeł po lokalnej mutacji stanu rozgłasza ją do pozostałych peerów w klastrze, używając wzorca **Fire-and-Forget**. Odbywa się to całkowicie asynchronicznie, by nie blokować klienta powolną komunikacją sieciową między węzłami. 
-Jeżeli dany peer nagle zniknie (awaria), pozostałe nie zawieszają się, a Load Balancer kieruje ruch wyłącznie do zdrowych węzłów.
+### 3. Asynchronous P2P Replication
+To maintain a High Availability (HA) setup, each node broadcasts state mutations to other peers in the cluster after a local mutation, using the **Fire-and-Forget** pattern. This happens completely asynchronously to avoid blocking the client with slow cross-node network communication. 
+If a peer suddenly disappears (failure), the others do not hang, and the Load Balancer routes traffic exclusively to healthy nodes.
 
-### 4. Wątki Wirtualne (Virtual Threads)
-Cały serwer HTTP, rozgłaszanie zapytań przez `HttpClient` oraz tło sprawdzania zdrowia węzłów bazują na lekkich Wątkach Wirtualnych wprowadzonych w Javie 21. Eliminują one potrzebę konfigurowania puli wątków i świetnie sprawdzają się w operacjach wejścia/wyjścia (I/O).
+### 4. Virtual Threads
+The entire HTTP server, request broadcasting via `HttpClient`, and the background node health checks are based on lightweight Virtual Threads introduced in Java 21. They eliminate the need for thread pool configuration and perform excellently in I/O operations.
 
-### 5. Idempotentność bez wycieków pamięci
-Dla ochrony przed powtórzonymi przez sieć transakcjami zastosowałem nagłówek `X-Request-ID`. Pamięć o przetworzonych żądaniach oparta jest na wysoce współbieżnym **LRU Cache** (zbudowanym na `ConcurrentHashMap.newKeySet()` i kolejce). Rozwiązanie to jest bezpieczne dla wątków i nie blokuje zbioru podczas odczytów, jednocześnie chroniąc serwer przed błędem "Out of Memory" poprzez automatyczne zrzucanie najstarszych wpisów po przekroczeniu limitu 10 000 żądań.
+### 5. Idempotency without memory leaks
+To protect against transactions repeated over the network, I used the `X-Request-ID` header. Memory of processed requests is based on a highly concurrent **LRU Cache** (built on `ConcurrentHashMap.newKeySet()` and a queue). This solution is thread-safe and does not block the set during reads, while protecting the server from "Out of Memory" errors by automatically dropping the oldest entries after exceeding a limit of 10,000 requests.
